@@ -1,0 +1,387 @@
+---
+title: "FOR-271 RNA-Seq Tutorial"
+output: html_document
+author: "Vesa Kejonen"
+date: "2024-05-30"
+---
+
+
+Described in this document is a R script used for Differential Expression Analysis or DEA for short. The script itself is based on instruction provided on the course with some minor modifications, with exactly the same functionality. This includes setting up the RStudio environment, reading the RNA count data provided for the course, normalization of this data, quality control and finally the differential expression analysis. 
+
+The original data for this tutorial is from study where two-month old Scots pine plants were infected with *Heterobasidion annosum*, a fungal forest pathogen that causes root and stem rot disease in Scots pine and Norway spruce. 
+
+## Setting up RStudio
+For succesful analysis, we need to set up our working directory and load the key libraries required, with the most important ones being DeSeq2 and edgeR.   
+```{r, eval=FALSE}
+#First we setup our working space for the analysis by installing and loading necessary packages and libraries.
+
+setwd("C:\Users\Vesa\Documents\GitHub\FOR-271_RNA_Seq-DEA") #This should be altered to match your own working directory.
+
+if (!require("BiocManager", quietly = TRUE)) #Contains essential libraries needed for the analysis.
+  install.packages("BiocManager")
+
+BiocManager::install("DESeq2") #Will be used for managing and manipulating RNA count data, ie. filtering normalized counts. 
+
+BiocManager::install("edgeR") #Used for normalizing the counts data with the TMM (trimmed mean of M values)
+
+install.packages("pheatmap") #Used in creating the heatmap for sample clustering.
+
+install.packages("ggplot2") #Used for creating plots based on the differential gene expression.
+```
+
+Now we should have the following libraries available to us.
+```{r, eval=FALSE}
+library(edgeR)
+
+library(DESeq2)
+
+library(pheatmap)
+
+library(ggplot2)
+```
+
+## Setting up our data
+
+Data provided for this tutorial consists of 6 files containing our raw counts. 3 of these are from control samples and 3 from infected samples. Let's read in this data to a Large DGEList, an essential edgeR object for this pipeline.
+```{r}
+#Start with reading our data into necessary data structures than can then be manipulated efficiently.
+
+library(edgeR)
+
+Coinfection.targets<-read.delim("./data/fileDesc.txt") #Read and store the information about the location of our data and its contents.
+
+rownames(Coinfection.targets)<-c("Ha1","Ha2","Ha3","Ctr1","Ctr2","Ctr3") #Add descriptive name for each of the samples.
+
+Coinfection.orig <- edgeR::readDGE(Coinfection.targets, header=F) #Create a Large DGEList from our sample data.
+```
+
+After this we can check the dimensions and contents of our data and make sure they are as they should be.
+```{r}
+dim(Coinfection.orig) #Check the dimensions of the resulting data frame.
+
+head(Coinfection.orig) #Check the first 6 rows of our data.
+```
+Let's then save our raw count data into its own object. This will be needed later to check our metadata file we are making soon.
+```{r}
+Coinfection.rawCount <- Coinfection.orig$count #Extract the raw counts from our data stored in the DGEList we just created into its own matrix.
+
+dim(Coinfection.rawCount) #Check the dimensions again...
+
+head(Coinfection.rawCount) #...And the contents.
+```
+
+Set up our metadata object. It will be needed later on in setting up our analysis and plots.
+```{r}
+#Let's then prepare our metadata.
+sampletype <- factor(c(rep("Ha",3), rep("Ctr", 3))) #Create a factor describing sample types for metadata, used later in PCA-plotting.
+
+meta <- data.frame(sampletype, row.names = colnames(Coinfection.orig$count)) #Create a data frame using the sampletype factor and row names extracted from 
+```
+
+Check the metadata against the raw counts object we made earlier.
+```{r}
+#Check that the column names in our raw count and meta matrices match.
+#colnames(Coinfection.orig$count)
+
+colnames(Coinfection.rawCount)
+
+rownames(meta)
+
+#all(colnames(Coinfection.orig$count) %in% rownames(meta))
+
+all(colnames(Coinfection.rawCount) %in% rownames(meta))
+```
+## Normalization of our data
+Now we are all set up to start with the actual steps that are central to this tutorial. First, we need to normalize our read counts. This allows us to make comparisons between gene expressions of different samples by taking into account their different sequencing depths (and gene lengths). For this, the choice of method in DESeq2 library is the median of ratios, where read counts are divided by sample-specific size factors determined by median ratio of gene counts relative to geometric mean per gene. Let's begin by initializing DESeqDataset for our data.
+```{r}
+#Move on to creating DESeqDataset object that is then normalized using median of ratios method in DESeq2 library.
+
+dds <- DESeq2::DESeqDataSetFromMatrix(Coinfection.orig, colData = meta, design = ~ sampletype) #Set up the DESeqDataSet-object.
+
+head(DESeq2::counts(dds)) #Check the contents of that object.
+```
+Let's then generate and take a peek at the necessary size factors required for normalization.
+```{r}
+dds <- DESeq2::estimateSizeFactors(dds) #Generate the size factors based on our data.
+
+DESeq2::sizeFactors(dds) #Check these generated size factors.
+```
+Finish normalization and save them in a separate .csv file needed for the submission.
+```{r}
+normalized_counts <- DESeq2::counts(dds, normalized=TRUE) #Apply median of ratios normalization on our count data.
+
+write.csv(normalized_counts, file="./results/coinfection_normalized_counts_DESeq2.csv") #Extract the normalized read counts into its own .csv file needed for the submission.
+```
+
+## Sample-level quality control of our data
+Now that we are done with normalization of our read counts, let's continue on to the sample-level quality control phase. The point of this is to assess the similarities and differences of our samples, major sources of variation and to see if they are congruent with our expectations based on the experimental set-up. For this purpose, we will now prepare our normalized read count data for Principle Component Analysis. We begin with log2 transformation of our data to improve clustering during visualization of the resulting PCA plot.
+```{r}
+#Now that we have normalized our count data, we can perform sample-level QC on it with a help of PCA-plot.
+rld <- DESeq2::rlog(dds, blind=TRUE) #Apply a rlog transformation on our normalized count to improve the clustering of our data.
+```
+Let's then draw our PCA plot using transformed read count data.
+```{r}
+DESeq2::plotPCA(rld, intgroup="sampletype") #Use the resulting DESeqTransform-object to draw the PCA-plot displaying the clustering in our data.
+```
+As we can see, PCA results in plot showing clear clustering within sample groups. Further analysis of the plot is provided below via answers to exercises accompanying the tutorial.
+
+Exercise:
+1.According to the plot, the infected samples and the control samples tend to form their own cluster, indicating that they have similar RNA read counts for different genes. However, one control sample seems to be an outlier with notably skewed location on the Y-axis. This might be due to plethora of reasons such as technical or experimental errors.
+
+2.Overall, the PCA plot is in agreement with our experimental design, with control and infected samples clustering as was expected.
+
+3.The variance information of the PC1 and PC2 in the plot tells us how much each of these principle components account for the total observed variance in our data. Together they capture 75% of the total variance. However, out of these two, the PC1 is more important as it is twice as big as PC2 and accounts for half of the total variance in the data by itself. 
+
+Let's then save a copy of this plot as it is needed for the submission.
+
+```{r, eval=FALSE}
+pdf("./results/PlotPCA_dds.pdf") #Save the plot in a separate PDF file for the submission.
+DESeq2::plotPCA(rld, intgroup="sampletype")
+dev.off()
+```
+
+Let's then apply hierarchical clustering visualized by a heatmap to further identify patterns in our data.This allows us to see correlation of gene expression for all pairwise combinations of our samples. For this, we need the use pheatmap library as DESeq2 doesn't provide this functionality. First however, we need to calculate the required pairwise correlation matrix.
+```{r}
+#Continuing with the sample-level QC for our normalized count data, let's draw a hierarchical clustering heatmap.
+rld_mat <- SummarizedExperiment::assay(rld) #First, read our transformed count data into a matrix.
+
+rld_cor <- cor(rld_mat) #Then, compute pairwise correlation values for the samples.
+
+head(rld_cor) #Check the resulting pairwise correlation matrix.
+
+head(meta) #Check meta-object created earlier, as this will be used for annotating the heatmap.
+```
+Then let's draw the heatmap using the pairwise correlation matrix and some nice colors provided by the RColorBrewer package.
+```{r}
+#Display the hierarchical clustering heatmap. 
+heat.colors <- RColorBrewer::brewer.pal(6, "Oranges") 
+pheatmap::pheatmap(rld_cor, annotation = meta, color = heat.colors, border_color=NA, fontsize = 10, 
+                   fontsize_row = 10, height=20)
+```
+Judging by the dendograms accompanying the heatmap, we can see that while the infected samples form a distinct cluster, there is some distance between one of the control samples and the other two when comparing to gene expression patterns, much in agreement with PCA results earlier. Outlier status of control sample 3 is further supported by the color intensities of the heatmap according to which its strongest positive correlation is with one of the infected samples instead of the other control samples. However, this infected sample (Ha2) also shows elevated correlation with control sample 1, while other control samples don't have as strong associations with any of the infected samples. Finally, let's save the resulting heatmap for submission.
+```{r, eval=FALSE}
+#Save the resulting heatmap in a separate PDF file for the submission.
+pdf("./results/PlotHeatmap_dds.pdf")
+heat.colors <- RColorBrewer::brewer.pal(6, "Oranges")
+pheatmap(rld_cor, annotation = meta, color = heat.colors, border_color=NA, fontsize = 10, 
+         fontsize_row = 10, height=20)
+```
+
+## Differential Expression Analysis
+
+For further analysis, we are going to utilize another R library, edgeR. For this however, we are going to need to normalize our raw read data using another method, trimmed mean of M values or TMM for short. Let's begin by setting up our data for analysis. 
+```{r, eval=FALSE}
+#Moving on to Differential Expression Analysis using edgeR.
+library(edgeR)
+options(digits=3)
+```
+Let's get our data from the file in the same manner as earlier.
+```{r}
+infection.targets<-read.delim("./data/fileDesc.txt") #Read and store the information about the location of our data and its contents.
+
+#infection.targets #Check.
+
+rownames(infection.targets)<-c("Ha1","Ha2","Ha3","Ctr1","Ctr2","Ctr3") #Add the necessary row names as well.
+
+infection.targets #And check that the information is all there.
+
+infection <- edgeR::readDGE(infection.targets, header=F) #Create a Large DGEList from our sample data.
+
+dim(infection) #Check its dimensions...
+
+head(infection) #...And first six rows.
+```
+For visualization purposes, let's extract the raw read counts into its own matrix and save it in a separate .csv file needed for the submission.
+```{r}
+infection.rawCount <- infection$count #Extract raw counts from the DGEList in to its own matrix.
+
+head(infection.rawCount) #Check the resulting matrix.
+
+write.csv(infection.rawCount, file="./results/infection.rawCounts.csv") #Save the raw count data for the submission.
+```
+
+Then let's draw a histogram to see roughly how these counts are distributed among different genes in one of the samples treated with *H. annosum*.
+```{r}
+library(ggplot2)
+#Next, let's use the raw count data to create a histogram depicting the number of genes and their raw expression counts. 
+#Draw the histogram using ggplot2-library.
+ggplot(infection.rawCount) +
+  geom_histogram(aes(x = Ha1), stat = "bin", bins = 200) +
+  xlab("Raw expression counts") +
+  ylab("Number of genes")
+```
+As we can see, the great majority of genes is expressed in low numbers. Let's save this histogram in a separate file.
+```{r}
+#Save a picture of the resulting histogram for the submission.
+png("./results/count distribution.png", res=300, height=1800, width=1800)
+ggplot(infection.rawCount) +
+  geom_histogram(aes(x = Ha1), stat = "bin", bins = 200) +
+  xlab("Raw expression counts") +
+  ylab("Number of genes")
+dev.off()
+```
+Now let's get the TMM normalized CPM and save it in a separate file before we filter our data.
+```{r}
+#First we will normalize our data and calculate the CPM before filtering using the TMM method implemented by edgeR. 
+infection.normCPM <- edgeR::cpm(edgeR::calcNormFactors(infection))
+
+dim(infection.normCPM) #Check the dimensions of the resulting matrix.
+
+head(infection.normCPM) #And first 6 rows, as you can see, there are some rows with only 0.0, which will be removed in the filtering.
+
+write.csv(infection.normCPM, file="./results/infection.normCPM.csv") #Save the unfiltered CPM data in a separate file.
+```
+Moving to filtering, we want to remove genes that are not expressed in 1 CPM in at least 3 of our samples.
+```{r}
+#Let's filter the data.
+
+infection.filtered <- rowSums(edgeR::cpm(infection)>1) >=3 #Remove genes that are not expressed in 1 CPM in at least 3 samples.
+
+table(infection.filtered) #Show how many genes are filtered away.
+
+infection$samples$lib.size #Check the library size before filtering.
+```
+
+As we can see, over half of the genes got filtered from our data. Set up a new DGEList object for the filtered data.
+```{r}
+Infection <- infection[infection.filtered,] #Create a new DGEList with the filtered data.
+
+colSums(Infection$counts) #Check the library size after filtering.
+
+dim(Infection) #Check the dimensions of the filtered data.
+```
+Update the filtered library size before normalization.
+```{r}
+Infection$samples$lib.size <- colSums(Infection$counts) #Update the filtered library size.
+
+Infection$samples #And check it.
+```
+Then let's normalize our filtered data using the TMM method as we did earlier with unfiltered data. First we prep the normalization factors.
+```{r}
+Infection = edgeR::calcNormFactors(Infection) #Calculate the normalization factors for the TMM normalization of filtered data.
+
+Infection$samples #Check the normalization factors.
+```
+Then we proceed with the actual normalization. Save the filtered and normalized data in its own file for the submission.
+```{r}
+Infection.filtered.normCPM <-edgeR::cpm(edgeR::calcNormFactors(Infection)) #Normalize the filtered data.
+
+write.csv(Infection.filtered.normCPM, file="./results/Infection.filtered.normCPM.csv") #And write it into a separate .csv file.
+```
+Now we are ready for the actual differential expression analysis. For this, we first need to specify our experimental design, as this will be needed for the statistical methods we'll be using.
+```{r}
+#Let's move on then to the final part, Differential Gene Expression Analysis.
+group<-factor(c('Ha','Ha','Ha',"Ctr","Ctr","Ctr")) #Define a treatment factor.
+
+#Describe the experimental design
+Infection.design <- model.matrix(~group)   
+rownames(Infection.design)<-colnames(Infection$counts)
+Infection.design
+```
+Before DEA for a quick QC-assessment, let's take a peek at our data using MDS plot to get a feel for relationships between our samples and identify possible outliers.
+```{r}
+#Identify possible outliers from our samples using a MDS plot. 
+limma::plotMDS(Infection, main="MDS plot of RNA-Seq", labels=colnames(Infection$counts))
+```
+As we can see, results of the MDS are quite similar to those we got with PCA and can be interpreted pretty much in the same manner, that is, one of the control samples is clearly different from the others, while the actual infected samples cluster neatly together. Now let's save this plot in a separate file for the submission.
+```{r}
+#Save the MDS plot in a separate file for the submission
+png("./results/plotMDS.Infection.png", res=300, height=1800, width=1800)
+limma::plotMDS(Infection, main="MDS plot of Infection RNA-Seq", labels=colnames(Infection$counts))
+dev.off()
+```
+Next, let's look at common, trended and tagwise dispersion present in our data. These are used to help us assess variability in gene expression in our data.
+```{r}
+#library(edgeR)
+#Based on the experimental design, estimate common, trended and tagwise dispersion for the filtered data.
+Infection <- estimateGLMCommonDisp(Infection, Infection.design)
+
+Infection <- estimateGLMTrendedDisp(Infection, Infection.design)
+
+Infection <- estimateGLMTagwiseDisp(Infection, Infection.design)
+```
+Let's then see if Negative Binomial model is good fit for our data or not.
+```{r}
+#library(edgeR)
+#Plot the mean expression level of genes and their variances in our data.
+plotMeanVar(Infection, show.tagwise.vars=T,NBline=T)
+```
+
+As we can see, the data points for dispersion follow the blue NB line fairly well, meaning that the negative binomial model is a good fit for our data. Next, let's visualize gene expression variation in our samples by looking at the biological coefficient variation and average log counts per million of our expressed genes.
+```{r}
+#Plot the Common, Trended and Tagwise dispersions for the filtered data.
+plotBCV(Infection)
+```
+
+As we can see from the plot, there is quite a lot of variation in gene expression based on the high BCV values. This is especially true in genes expressed in lower quantities. The variation does settle down with higher average log CPM values as is typical. For further analysis we need to fit generalized linear model to our data, which can be then used to assess differential gene expression in treated samples compared to controls.
+```{r}
+#Fit Generalized Linear Models to our data.
+Infection.fit <- glmFit(Infection, Infection.design)
+colnames(Infection.fit)
+```
+
+To see which genes are differentially expressed in our samplesm we need to do a Likelihood Ratio Test, which allows us to how GLM we just generated compares to reduced model made with assumption that treatment has no effect on gene expression in samples versus controls.
+```{r}
+#Conduct a Likelihood Ratio Test to assess the effects of treatment vs control.
+lrt.Ha_vs_Ctr <- glmLRT(Infection.fit, coef=2)
+```
+
+Let's take a look of some of the genes that are differentially expressed.
+```{r}
+#Get a table containing top differentially expressed genes.
+t1<-topTags(lrt.Ha_vs_Ctr, n=nrow(Infection))
+head(t1$table)
+```
+Get a text-based summary of differentially expressed genes in our data.
+```{r}
+#See how many of the genes are up and down regulated.
+summary(decideTests(lrt.Ha_vs_Ctr, adjust.method="BH", p.value=0.05))
+
+nrow(subset(topTags(lrt.Ha_vs_Ctr, n=586)$table,  logFC > 0))
+
+nrow(subset(topTags(lrt.Ha_vs_Ctr, n=586)$table,  logFC < 0))
+```
+
+Save up- and downregulated genes into their own respective files for submission.
+```{r}
+#Output their own tables for up and downregulated genes.
+lrt.Ha_vs_Ctr_UP <- subset(topTags(lrt.Ha_vs_Ctr, n=586)$table, logFC > 0)
+lrt.Ha_vs_Ctr_DW <- subset(topTags(lrt.Ha_vs_Ctr, n=586)$table, logFC < 0)
+
+#And write them into a separate .csv file.
+write.csv(lrt.Ha_vs_Ctr_UP, file="./results/lrt.Ha_vs_Ctr_UP.csv")
+write.csv(lrt.Ha_vs_Ctr_DW, file="./results/lrt.Ha_vs_Ctr_DW.csv")
+```
+Prepare the observed differentially expressed genes for visualization.
+```{r}
+#Specify DEGs for plotting.
+DEtags.lrt.Ha_vs_Ctr <- rownames(Infection)[as.logical(decideTests(lrt.Ha_vs_Ctr, adjust.method="BH", p.value=0.05))]
+
+#For plotting DEGs, label all genes grey.
+Infection.colHavsCtr = rep('grey55', nrow(Infection))
+
+#And then label upregulated genes red and downregulated blue.
+Infection.colHavsCtr[lrt.Ha_vs_Ctr$table$PValue < 0.05 & lrt.Ha_vs_Ctr$table$logFC >0 ] <- "red"
+Infection.colHavsCtr[lrt.Ha_vs_Ctr$table$PValue < 0.05 & lrt.Ha_vs_Ctr$table$logFC <0 ] <- "blue"
+```
+For visualization, let's draw a plot where we easily see differentially expressed genes in our samples.
+```{r}
+#Draw a plot visualizing DEGs, changes in their expression levels and log-counts per million.
+par(omi=c(0.1,0.1,0.1,0.1), las=1, cex=0.5, mgp=c(3,1,0), cex.main=1.8, cex.lab=1.4, cex.axis=1.4)
+plotSmear(lrt.Ha_vs_Ctr, xlab="log-counts per million (logCPM)", ylab="log2-fold change (log2FC)", main="Ha infection compared to Control", smearWidth=0.5, pch=21, cex=0.4, deCol="red", col=Infection.colHavsCtr, ylim=c(-7,7), yaxs="i")
+abline(h=c(-1,1),col="dodgerblue")
+```
+As is evident from the plot, it takes a shape of a christmas tree laying sideways, with the bulk of the genes that form the base (and the trunk) of the tree being expressed in low numbers and/or without significant difference when compared to controls. This is however also where most of the variation in expression is present as can be seen in concentration of up- and downregulated genes between 0 and 4 logCPM. There are some interesting exceptions, genes that are up(- and some down)regulated and expressed in high numbers in infected samples. Finally, lets save the plot we just made to a separate file to finish off our analysis.
+```{r, eval=FALSE}
+#Save the said plot for submission.
+png("./results/plotSmear.InfectionRNAseq.png", res=300, height=1800, width=1800)
+par(omi=c(0.1,0.1,0.1,0.1), las=1, cex=0.5, mgp=c(3,1,0), cex.main=1.8, cex.lab=1.4, cex.axis=1.4)
+plotSmear(lrt.Ha_vs_Ctr, xlab="log-counts per million (logCPM)", ylab="log2-fold change (log2FC)", main="Ha infection compared to Control", smearWidth=0.5, pch=21, cex=0.4, deCol="red", col=Infection.colHavsCtr, ylim=c(-7,7), yaxs="i")
+abline(h=c(-1,1),col="dodgerblue")
+dev.off()
+
+```
+ 
+ That wraps up the required things for this tutorial. However, if we were to continue analysis, the next step would be to zoom into individual genes to understand their functions and possible reasons for their differential expression in reaction to external factors such as *H. annosum* infection.
+
+
